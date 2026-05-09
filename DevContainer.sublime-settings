@@ -1,0 +1,98 @@
+{
+  // Logging level: "debug", "info", "warning", "error"
+  "log_level": "info",
+
+  // Container runtime to use: "docker", "podman", or null for auto-detect
+  "container_runtime": null,
+
+  // Backup runtime for operations not supported by main runtime
+  "backup_runtime": null,
+
+  // Compose command to use: "docker-compose", "podman-compose", or null for auto-detect
+  "compose_command": null,
+
+  // Backup compose command
+  "backup_compose_command": null,
+
+  // Disable recursive search for devcontainer.json
+  // If true, only checks .devcontainer.json and .devcontainer/devcontainer.json
+  // in the workspace folder
+  "disable_recursive_config_search": false,
+
+  // Automatically start containers when devcontainer.json is found
+  "auto_start": false,
+
+  // Automatically stop containers when Sublime Text exits
+  "clean_on_exit": false,
+
+  // Automatically restart containers when devcontainer.json is updated
+  "auto_restart_on_config_change": false,
+
+  // Cache images when adding dependencies to speed up subsequent attachments
+  "cache_images": true,
+
+  // Mounts to add when attaching to containers
+  "attach_mounts": {
+    // Mount Sublime Text configuration
+    "sublimetext_config": {
+      "enabled": false,
+      "source": "~/.config/sublime-text",
+      "target": "/root/.config/sublime-text",
+      "options": ["readonly"]
+    },
+    // Mount Sublime Text packages
+    "sublimetext_packages": {
+      "enabled": false,
+      "source": "~/.config/sublime-text/Packages",
+      "target": "/root/.config/sublime-text/Packages",
+      "options": ["readonly"]
+    }
+  },
+
+  // Additional mounts to always add (list of mount strings)
+  "always_mount": [],
+
+  // LSP integration settings
+  "lsp": {
+    // Automatically configure LSP servers in containers
+    "auto_configure": true,
+    
+    // Default LSP servers to install in containers
+    "default_servers": {
+      "python": ["pyright", "ruff"],
+      "javascript": ["typescript-language-server"],
+      "typescript": ["typescript-language-server"],
+      "rust": ["rust-analyzer"],
+      "go": ["gopls"],
+      "java": ["jdtls"],
+      "c++": ["clangd"],
+      "ruby": ["solargraph"]
+    },
+
+    // Port to use for LSP communication
+    "lsp_port": 9999
+  },
+
+  // Template for new devcontainer.json files
+  "devcontainer_json_template": {
+    "name": "${workspace_name}",
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    "customizations": {
+      "sublimetext": {
+        "extensions": [],
+        "settings": {}
+      }
+    },
+    "forwardPorts": [],
+    "postCreateCommand": "",
+    "remoteUser": "root"
+  },
+
+  // Features to install in containers
+  "default_features": {
+    // Git
+    "ghcr.io/devcontainers/features/git:1": {
+      "version": "latest"
+    }
+  }
+}

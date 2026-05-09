@@ -1,0 +1,40 @@
+[
+    {
+        "id": "tools",
+        "children":
+        [
+            {
+                "caption": "DevContainer",
+                "mnemonic": "D",
+                "children":
+                [
+                    {
+                        "caption": "Start Container",
+                        "command": "devcontainer_start"
+                    },
+                    {
+                        "caption": "Stop Container",
+                        "command": "devcontainer_stop"
+                    },
+                    {
+                        "caption": "Attach to Container",
+                        "command": "devcontainer_attach"
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Edit devcontainer.json",
+                        "command": "devcontainer_edit_config"
+                    },
+                    {
+                        "caption": "Execute Command",
+                        "command": "devcontainer_exec"
+                    },
+                    {
+                        "caption": "View Logs",
+                        "command": "devcontainer_logs"
+                    }
+                ]
+            }
+        ]
+    }
+]

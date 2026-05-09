@@ -1,0 +1,26 @@
+[
+    {
+        "caption": "DevContainer: Start",
+        "command": "devcontainer_start"
+    },
+    {
+        "caption": "DevContainer: Stop",
+        "command": "devcontainer_stop"
+    },
+    {
+        "caption": "DevContainer: Attach",
+        "command": "devcontainer_attach"
+    },
+    {
+        "caption": "DevContainer: Edit Config",
+        "command": "devcontainer_edit_config"
+    },
+    {
+        "caption": "DevContainer: Execute Command",
+        "command": "devcontainer_exec"
+    },
+    {
+        "caption": "DevContainer: View Logs",
+        "command": "devcontainer_logs"
+    }
+]
