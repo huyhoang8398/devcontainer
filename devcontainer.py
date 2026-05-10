@@ -181,7 +181,7 @@ class ContainerRuntime:
 class ContainerManager:
     """Manages container lifecycle"""
     
-    _active_containers = []
+    _active_containers = {}  # Changed to dict for metadata storage
     
     @classmethod
     def build_container(cls, config: Dict, config_path: Path, 
@@ -212,9 +212,11 @@ class ContainerManager:
         cmd = [runtime, "run", "-d", "--name", name]
         
         # Add workspace mount
-        workspace = config_path.parent.parent
+        workspace = config_path.parent.parent.resolve()
+        workspace_str = str(workspace)        
+
         workspace_mount = config.get("workspaceMount", 
-                                    f"type=bind,source={workspace},target=/workspace")
+                                    f"type=bind,source={workspace_str},target={workspace_str}")
         cmd.extend(["--mount", workspace_mount])
         
         # Add port forwards
@@ -228,10 +230,13 @@ class ContainerManager:
         # Add the image
         cmd.append(image)
 
-        # Keep container alive like VS Code devcontainers
+        # TODO: better way to handle this
+        # Keep container alive without blocking stdin/stdout for LSP
+        # Use tail -f /dev/null instead of sleep infinity to allow proper I/O
         cmd.extend([
-            "sleep",
-            "infinity"
+            "tail",
+            "-f",
+            "/dev/null"
         ])        
 
         # Run in thread
@@ -242,13 +247,40 @@ class ContainerManager:
                 
                 if result.returncode == 0:
                     container_id = result.stdout.strip()
-                    cls._active_containers.append(container_id)
+                    
+                    # Store container metadata
+                    cls._active_containers[container_id] = {
+                        "name": name,
+                        "config": config,
+                        "config_path": config_path,
+                        "workspace_mount": workspace_mount,
+                        "workspace_folder": str(workspace)
+                    }
+                    
                     log(f"Container started: {container_id}")
                     
                     # Run post-create command
                     post_create = config.get("postCreateCommand")
                     if post_create:
-                        cls._exec_in_container(container_id, post_create)
+                        cls._safe_exec(container_id, post_create)
+                    
+                    # Setup LSP in background after 2 seconds
+                    def setup_lsp():
+                        try:
+                            import time
+                            time.sleep(2)
+                            from . import lsp_helper
+                            container_name = config.get("name", "devcontainer")
+                            lsp_helper.setup_lsp_for_devcontainer(
+                                container_name, config, str(workspace), workspace_mount, runtime
+                            )
+                        except Exception as e:
+                            log(f"Error in LSP setup thread: {e}", "error")
+                            import traceback
+                            log(traceback.format_exc(), "debug")
+                    
+                    lsp_thread = threading.Thread(target=setup_lsp, daemon=True)
+                    lsp_thread.start()
                     
                     if callback:
                         sublime.set_timeout(lambda: callback(container_id), 0)
@@ -262,7 +294,7 @@ class ContainerManager:
                 if callback:
                     sublime.set_timeout(lambda: callback(None), 0)
         
-        thread = threading.Thread(target=run)
+        thread = threading.Thread(target=run, daemon=True)
         thread.start()
         return None
     
@@ -311,7 +343,7 @@ class ContainerManager:
                 if callback:
                     sublime.set_timeout(lambda: callback(None), 0)
         
-        thread = threading.Thread(target=build)
+        thread = threading.Thread(target=build, daemon=True)
         thread.start()
         return None
     
@@ -354,26 +386,31 @@ class ContainerManager:
                 if callback:
                     sublime.set_timeout(lambda: callback(None), 0)
         
-        thread = threading.Thread(target=build)
+        thread = threading.Thread(target=build, daemon=True)
         thread.start()
         return None
     
     @classmethod
-    def _exec_in_container(cls, container_id: str, command: str):
-        """Execute command in container"""
+    def _safe_exec(cls, container_id: str, command: str):
         runtime = ContainerRuntime.detect_runtime()
-        
-        if isinstance(command, str):
-            cmd = [runtime, "exec", container_id, "sh", "-c", command]
+    
+        # wait until container is actually running
+        import time
+        for _ in range(20):  # ~4 seconds max
+            if cls.is_container_running(container_id, runtime):
+                break
+            time.sleep(0.2)
         else:
-            cmd = [runtime, "exec", container_id] + command
-        
+            log("Container never reached running state", "error")
+            return
+    
+        cmd = [runtime, "exec", "-i", container_id, "sh", "-lc", command]
+    
         try:
-            log(f"Executing in container: {command}")
             subprocess.run(cmd)
         except Exception as e:
-            log(f"Error executing command: {e}", "error")
-    
+            log(f"Exec failed: {e}", "error")    
+
     @classmethod
     def stop_container(cls, container_id: str):
         """Stop a container"""
@@ -381,7 +418,7 @@ class ContainerManager:
         try:
             subprocess.run([runtime, "stop", container_id])
             if container_id in cls._active_containers:
-                cls._active_containers.remove(container_id)
+                del cls._active_containers[container_id]
             log(f"Stopped container: {container_id}")
         except Exception as e:
             log(f"Error stopping container: {e}", "error")
@@ -389,7 +426,7 @@ class ContainerManager:
     @classmethod
     def stop_all_containers(cls):
         """Stop all active containers"""
-        for container_id in cls._active_containers[:]:
+        for container_id in list(cls._active_containers.keys()):
             cls.stop_container(container_id)
     
     @classmethod
@@ -410,6 +447,17 @@ class ContainerManager:
             log(f"Error getting container IP: {e}", "error")
         return None
 
+    @classmethod
+    def is_container_running(cls, container_id: str, runtime: str = "podman") -> bool:
+        try:
+            result = subprocess.run(
+                [runtime, "inspect", "-f", "{{.State.Running}}", container_id],
+                capture_output=True,
+                text=True
+            )
+            return result.returncode == 0 and result.stdout.strip().lower() == "true"
+        except Exception:
+            return False
 
 class LSPIntegration:
     """Handles LSP server integration in containers"""
@@ -425,6 +473,11 @@ class LSPIntegration:
         
         # Extensions/plugins to install
         extensions = sublime_config.get("extensions", [])
+
+        mapper = LSPWorkspaceMapper(workspace_mount)
+        log(f"Workspace mount: {workspace_mount}")
+        log(f"Mapper local root: {mapper.local_path}")
+        log(f"Mapper container root: {mapper.container_path}")
         
         # LSP servers to configure
         # This would need to coordinate with the LSP package
@@ -608,8 +661,8 @@ class DevcontainerExecCommand(sublime_plugin.WindowCommand):
         
         def on_done(command):
             if command:
-                container_id = ContainerManager._active_containers[0]
-                ContainerManager._exec_in_container(container_id, command)
+                container_id = list(ContainerManager._active_containers.keys())[0]
+                ContainerManager._safe_exec(container_id, command)
         
         self.window.show_input_panel(
             "Command to execute:",

@@ -17,66 +17,56 @@ class LSPServerManager:
     LSP_SERVERS = {
         "python": {
             "pyright": {
-                "install": ["pip3", "install", "pyright"],
-                "command": ["pyright-langserver", "--stdio"],
-                "selector": "source.python"
-            },
-            "pylsp": {
-                "install": ["pip3", "install", "python-lsp-server[all]"],
-                "command": ["pylsp"],
-                "selector": "source.python"
-            },
-            "ruff": {
-                "install": ["pip3", "install", "ruff-lsp"],
-                "command": ["ruff-lsp"],
+                "install": "pip install basedpyright",
+                "command": ["/usr/local/bin/basedpyright-langserver", "--stdio"],
                 "selector": "source.python"
             }
         },
         "javascript": {
             "typescript-language-server": {
-                "install": ["npm", "install", "-g", "typescript-language-server", "typescript"],
+                "install": "npm install -g typescript-language-server typescript",
                 "command": ["typescript-language-server", "--stdio"],
                 "selector": "source.js"
             }
         },
         "typescript": {
             "typescript-language-server": {
-                "install": ["npm", "install", "-g", "typescript-language-server", "typescript"],
+                "install": "npm install -g typescript-language-server typescript",
                 "command": ["typescript-language-server", "--stdio"],
                 "selector": "source.ts"
             }
         },
         "rust": {
             "rust-analyzer": {
-                "install": ["rustup", "component", "add", "rust-analyzer"],
+                "install": "rustup component add rust-analyzer",
                 "command": ["rust-analyzer"],
                 "selector": "source.rust"
             }
         },
         "go": {
             "gopls": {
-                "install": ["go", "install", "golang.org/x/tools/gopls@latest"],
+                "install": "go install golang.org/x/tools/gopls@latest",
                 "command": ["gopls"],
                 "selector": "source.go"
             }
         },
         "c++": {
             "clangd": {
-                "install": ["apt-get", "update", "&&", "apt-get", "install", "-y", "clangd"],
+                "install": "apt-get update && apt-get install -y clangd",
                 "command": ["clangd"],
                 "selector": "source.c++, source.c"
             }
         },
         "ruby": {
             "solargraph": {
-                "install": ["gem", "install", "solargraph"],
+                "install": "gem install solargraph",
                 "command": ["solargraph", "stdio"],
                 "selector": "source.ruby"
             }
         },
         "java": {
             "jdtls": {
-                "install": [],  # Usually pre-installed in Java containers
+                "install": "",
                 "command": ["jdtls"],
                 "selector": "source.java"
             }
@@ -84,141 +74,189 @@ class LSPServerManager:
     }
     
     @classmethod
+    def detect_project_languages(cls, workspace_folder: str) -> set:
+        """Detect project languages from file extensions"""
+        from . import devcontainer
+        import os
+        
+        languages = set()
+        
+        # Extensions to language mapping
+        ext_to_lang = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.ts': 'typescript',
+            '.jsx': 'javascript',
+            '.tsx': 'typescript',
+            '.rs': 'rust',
+            '.go': 'go',
+            '.rb': 'ruby',
+            '.java': 'java',
+            '.cpp': 'c++',
+            '.c': 'c++',
+            '.h': 'c++',
+        }
+        
+        # Folders to skip
+        skip_dirs = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 
+                     '.pytest_cache', 'dist', 'build', '.egg-info'}
+        
+        try:
+            workspace = Path(workspace_folder).resolve()
+            
+            # Use os.walk for Python 3.11 compatibility
+            for root, dirs, files in os.walk(workspace):
+                # Remove skip directories from traversal
+                dirs[:] = [d for d in dirs if d not in skip_dirs]
+                
+                # Check files
+                for file in files:
+                    ext = Path(file).suffix.lower()
+                    if ext in ext_to_lang:
+                        lang = ext_to_lang[ext]
+                        languages.add(lang)
+                        devcontainer.log(f"Detected language: {lang} (*.{ext})")
+            
+            if languages:
+                devcontainer.log(f"Project languages detected: {sorted(languages)}")
+            else:
+                devcontainer.log("No supported languages detected", "warning")
+            
+            return languages
+            
+        except Exception as e:
+            devcontainer.log(f"Error detecting languages: {e}", "error")
+            import traceback
+            devcontainer.log(traceback.format_exc(), "debug")
+            return set()
+    
+    @classmethod
     def install_lsp_server(cls, container_id: str, language: str, 
-                          server_name: str, runtime: str = "docker"):
+                          server_name: str, runtime: str = "podman"):
         """Install LSP server in container"""
+        from . import devcontainer
+        
         if language not in cls.LSP_SERVERS:
-            print(f"Unknown language: {language}")
+            devcontainer.log(f"Unknown language: {language}", "warning")
             return False
         
         if server_name not in cls.LSP_SERVERS[language]:
-            print(f"Unknown LSP server for {language}: {server_name}")
+            devcontainer.log(f"Unknown LSP server for {language}: {server_name}", "warning")
             return False
         
         server_config = cls.LSP_SERVERS[language][server_name]
-        install_cmd = server_config.get("install", [])
+        install_cmd = server_config.get("install", "")
         
         if not install_cmd:
-            print(f"No installation command for {server_name}")
+            devcontainer.log(f"No installation command for {server_name}")
             return True
         
         # Execute installation in container
-        cmd = [runtime, "exec", container_id] + install_cmd
+        cmd = [runtime, "exec", "-i", container_id, "sh", "-c", install_cmd]
         
         try:
-            print(f"Installing {server_name} in container {container_id}")
+            devcontainer.log(f"Installing {server_name} in container {container_id[:12]}...")
+            devcontainer.log(f"Install command: {install_cmd}", "debug")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             
             if result.returncode == 0:
-                print(f"Successfully installed {server_name}")
+                devcontainer.log(f"✓ Successfully installed {server_name}")
                 return True
             else:
-                print(f"Failed to install {server_name}: {result.stderr}")
+                devcontainer.log(f"Installation failed for {server_name}", "warning")
+                if result.stderr:
+                    devcontainer.log(f"Error output: {result.stderr[:200]}", "debug")
                 return False
-        except Exception as e:
-            print(f"Error installing {server_name}: {e}")
+        except subprocess.TimeoutExpired:
+            devcontainer.log(f"Installation timeout for {server_name}", "error")
             return False
-    
+        except Exception as e:
+            devcontainer.log(f"Error installing {server_name}: {e}", "error")
+            return False
+
     @classmethod
-    def generate_lsp_config(cls, container_id: str, container_ip: str,
-                           languages: List[str]) -> Dict:
-        """Generate LSP configuration for container"""
-        lsp_config = {
-            "clients": {}
-        }
-        
+    def generate_lsp_config(cls, container_name: str,
+                           languages: List[str], 
+                           runtime: str = "podman",
+                           workspace_folder: str = None) -> Dict:
+    
+        lsp_config = {"clients": {}}
+    
         for language in languages:
             if language not in cls.LSP_SERVERS:
                 continue
-            
+    
             for server_name, server_config in cls.LSP_SERVERS[language].items():
-                client_name = f"{language}-{server_name}-container"
-                
+                client_name = f"{language}-{server_name}"
+    
+                server_command = server_config["command"]
+    
+                remote_cmd = [
+                    runtime, "exec", "-i",
+                    "--workdir", workspace_folder,   # Same path
+                    container_name
+                ] + server_command
+    
                 lsp_config["clients"][client_name] = {
                     "enabled": True,
-                    "command": cls._build_remote_command(
-                        container_id, 
-                        server_config["command"]
-                    ),
+                    "command": remote_cmd,
                     "selector": server_config["selector"],
+    
+                    # No pathMap needed anymore!
+                    "rootPath": workspace_folder,
+                    "rootUri": f"file://{workspace_folder}",
+    
+                    "initializationOptions": {
+                        "rootUri": f"file://{workspace_folder}",
+                        "rootPath": workspace_folder
+                    },
+    
+                    "workspaceFolders": [
+                        {
+                            "name": "workspace",
+                            "uri": f"file://{workspace_folder}"
+                        }
+                    ],
+    
                     "env": {
-                        "DEVCONTAINER_ID": container_id
+                        "DEVCONTAINER_ID": container_name,
+                        "WORKSPACE_PATH": workspace_folder
                     }
                 }
-        
+    
         return lsp_config
-    
+
     @classmethod
-    def _build_remote_command(cls, container_id: str, 
-                             server_command: List[str]) -> List[str]:
-        """Build command to run LSP server in container"""
-        runtime = "docker"  # TODO: Get from settings
-        
-        # Command to execute LSP server in container
-        return [
-            runtime, "exec", "-i", container_id
-        ] + server_command
-    
-    @classmethod
-    def update_lsp_settings(cls, container_config: Dict):
+    def update_lsp_settings(cls, lsp_config: Dict) -> bool:
         """Update LSP package settings with container configuration"""
+        from . import devcontainer
+        
         try:
             # Load current LSP settings
-            lsp_settings_file = "LSP.sublime-settings"
-            lsp_settings = sublime.load_settings(lsp_settings_file)
+            lsp_settings = sublime.load_settings("LSP.sublime-settings")
             
-            # Get container LSP configuration
-            customizations = container_config.get("customizations", {})
-            sublime_config = customizations.get("sublimetext", {})
-            
-            # Merge settings
             current_clients = lsp_settings.get("clients", {})
             
-            # Add devcontainer clients
-            # This would need more sophisticated merging logic
+            # IMPORTANT: Only add our devcontainer clients, don't remove others
+            for client_name, client_config in lsp_config["clients"].items():
+                current_clients[client_name] = client_config
             
-            sublime.save_settings(lsp_settings_file)
+            lsp_settings.set("clients", current_clients)
+            sublime.save_settings("LSP.sublime-settings")
             
-            print("LSP settings updated for devcontainer")
+            devcontainer.log(f"✓ LSP settings updated with {len(lsp_config['clients'])} client(s)")
             return True
         except Exception as e:
-            print(f"Error updating LSP settings: {e}")
+            devcontainer.log(f"Error updating LSP settings: {e}", "error")
+            import traceback
+            devcontainer.log(traceback.format_exc(), "debug")
             return False
-
-
-class DevContainerLSPServer:
-    """Wrapper for LSP server running in container"""
-    
-    def __init__(self, container_id: str, language: str, server_name: str):
-        self.container_id = container_id
-        self.language = language
-        self.server_name = server_name
-        self.runtime = "docker"  # TODO: Get from settings
-    
-    def start(self):
-        """Start LSP server in container"""
-        server_config = LSPServerManager.LSP_SERVERS.get(
-            self.language, {}
-        ).get(self.server_name)
-        
-        if not server_config:
-            return False
-        
-        # The LSP package will handle starting via the command
-        # we configured in generate_lsp_config
-        return True
-    
-    def execute_command(self, command: List[str]) -> subprocess.CompletedProcess:
-        """Execute command in container"""
-        cmd = [self.runtime, "exec", "-i", self.container_id] + command
-        return subprocess.run(cmd, capture_output=True, text=True)
 
 
 class LSPWorkspaceMapper:
     """Maps local workspace paths to container paths"""
     
-    def __init__(self, container_id: str, workspace_mount: str):
-        self.container_id = container_id
+    def __init__(self, workspace_mount: str):
         self.workspace_mount = workspace_mount
         self._parse_mount()
     
@@ -240,98 +278,146 @@ class LSPWorkspaceMapper:
         if not self.local_path or not self.container_path:
             return None
         
-        local = Path(local_path).resolve()
-        local_workspace = Path(self.local_path).resolve()
-        
-        if not str(local).startswith(str(local_workspace)):
+        try:
+            local = Path(local_path).resolve()
+            local_workspace = Path(self.local_path).resolve()
+            
+            if not str(local).startswith(str(local_workspace)):
+                return None
+            
+            relative = local.relative_to(local_workspace)
+            container = Path(self.container_path) / relative
+            
+            return str(container)
+        except Exception:
             return None
-        
-        relative = local.relative_to(local_workspace)
-        container = Path(self.container_path) / relative
-        
-        return str(container)
     
     def container_to_local(self, container_path: str) -> Optional[str]:
         """Convert container path to local path"""
         if not self.local_path or not self.container_path:
             return None
         
-        container = Path(container_path)
-        container_workspace = Path(self.container_path)
-        
-        if not str(container).startswith(str(container_workspace)):
+        try:
+            container = Path(container_path)
+            container_workspace = Path(self.container_path)
+            
+            if not str(container).startswith(str(container_workspace)):
+                return None
+            
+            relative = container.relative_to(container_workspace)
+            local = Path(self.local_path) / relative
+            
+            return str(local)
+        except Exception:
             return None
-        
-        relative = container.relative_to(container_workspace)
-        local = Path(self.local_path) / relative
-        
-        return str(local)
 
+    def rewrite_uri(self, uri: str) -> str:
+        """
+        Convert host file URIs to container URIs
+        """
+        if uri.startswith("file://"):
+            path = uri[7:]
+        else:
+            path = uri
+    
+        converted = self.local_to_container(path)
+        if converted:
+            return "file://" + converted
+    
+        return uri
 
 def setup_lsp_for_devcontainer(container_id: str, config: Dict,
-                               workspace_mount: str) -> bool:
+                               workspace_folder: str, workspace_mount: str, 
+                               runtime: str = "podman") -> bool:
     """
     Setup LSP integration for a devcontainer
-    
-    Args:
-        container_id: Container ID
-        config: devcontainer.json configuration
-        workspace_mount: Workspace mount string
-    
-    Returns:
-        True if setup successful
     """
+    from . import devcontainer
+    
     try:
-        # Detect languages based on workspace
-        # For now, we'll use a simple approach
+        devcontainer.log(f"Starting LSP setup for container {container_id[:12]}...")
+        
+        # Get settings
         settings = sublime.load_settings("DevContainer.sublime-settings")
         lsp_config = settings.get("lsp", {})
         
         if not lsp_config.get("auto_configure", True):
+            devcontainer.log("LSP auto-configuration is disabled")
             return True
         
-        # Get languages to configure
+        # Detect project languages
+        detected_languages = LSPServerManager.detect_project_languages(workspace_folder)
+        
+        if not detected_languages:
+            devcontainer.log("No supported languages detected in project", "warning")
+            return False
+        
+        devcontainer.log(f"Detected project languages: {sorted(detected_languages)}")
+        
+        # Get configured servers
         default_servers = lsp_config.get("default_servers", {})
         
-        # Install LSP servers
-        runtime = "docker"  # TODO: Get from settings
+        if not default_servers:
+            devcontainer.log("No default LSP servers configured", "warning")
+            return False
         
-        for language, servers in default_servers.items():
-            for server in servers:
-                LSPServerManager.install_lsp_server(
+        # Only install servers for detected languages
+        languages_to_install = [lang for lang in detected_languages if lang in default_servers]
+        
+        if not languages_to_install:
+            devcontainer.log("No configured LSP servers for detected languages", "warning")
+            return False
+        
+        devcontainer.log(f"Will install LSP servers for: {languages_to_install}")
+        
+        # Install LSP servers with retry
+        import time
+        for language in languages_to_install:
+            servers = default_servers[language]
+            if isinstance(servers, list) and servers:
+                server = servers[0]
+            else:
+                continue
+            
+            # Retry installation up to 3 times
+            for attempt in range(3):
+                success = LSPServerManager.install_lsp_server(
                     container_id, language, server, runtime
                 )
+                if success:
+                    break
+                if attempt < 2:
+                    time.sleep(2)
+                    devcontainer.log(f"Retrying {server} installation (attempt {attempt + 2}/3)")
+            else:
+                devcontainer.log(f"Warning: Failed to install {server} for {language} after 3 attempts", "warning")
         
-        # Generate and update LSP configuration
-        languages = list(default_servers.keys())
-        container_ip = get_container_ip(container_id, runtime)
+        # Wait longer for all installations to complete
+        time.sleep(3)  # Increased from 1 second
         
-        if container_ip:
-            lsp_settings = LSPServerManager.generate_lsp_config(
-                container_id, container_ip, languages
-            )
-            
-            # Update LSP settings
-            LSPServerManager.update_lsp_settings(config)
-        
-        return True
-    except Exception as e:
-        print(f"Error setting up LSP: {e}")
-        return False
-
-
-def get_container_ip(container_id: str, runtime: str = "docker") -> Optional[str]:
-    """Get container IP address"""
-    try:
-        result = subprocess.run(
-            [runtime, "inspect", "-f",
-             "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-             container_id],
-            capture_output=True,
-            text=True
+        # Generate LSP configuration
+        lsp_settings = LSPServerManager.generate_lsp_config(
+            container_id, 
+            languages_to_install, 
+            runtime,
+            workspace_folder=workspace_folder   # Pass the real host path
         )
-        if result.returncode == 0:
-            return result.stdout.strip()
+
+        # Update Sublime's LSP settings
+        if lsp_settings["clients"]:
+            success = LSPServerManager.update_lsp_settings(lsp_settings)
+            if success:
+                devcontainer.log(f"✓ LSP setup complete with {len(lsp_settings['clients'])} server(s)")
+                return True
+            else:
+                devcontainer.log("Failed to update LSP settings", "error")
+                return False
+        else:
+            devcontainer.log("No LSP clients generated", "warning")
+            return False
+            
     except Exception as e:
-        print(f"Error getting container IP: {e}")
-    return None
+        devcontainer.log(f"Error during LSP setup: {e}", "error")
+        import traceback
+        devcontainer.log(traceback.format_exc(), "debug")
+        return False
